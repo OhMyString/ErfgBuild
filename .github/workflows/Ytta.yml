@@ -37,6 +37,7 @@ jobs:
         with:
           repository: Frostleaft07/GxExTxF
           path: ErfanGSIs
+          submodules: recursive
 
       - name: 777 permissions
         run: |
@@ -86,14 +87,21 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/ErfanGSIs
           mkdir infobuild
-          cp $GITHUB_WORKSPACE/ErfanGSIs/output/*txt $GITHUB_WORKSPACE/ErfanGSIs/infobuild/
-          cat $GITHUB_WORKSPACE/ErfanGSIs/infobuild/*txt
+          cp $GITHUB_WORKSPACE/ErfanGSIs/output/*.txt $GITHUB_WORKSPACE/ErfanGSIs/infobuild/
+          mv $GITHUB_WORKSPACE/ErfanGSIs/infobuild/*.txt $GITHUB_WORKSPACE/ErfanGSIs/infobuild/readme.txt
+          cat $GITHUB_WORKSPACE/ErfanGSIs/infobuild/*.txt
           pwd
           7za a -mmt16 -t7z -r Frost_${{ steps.config.outputs.repack_name }} output/*
           mkdir upload
           ls upload
           if [ $(ls -l Frost_${{ steps.config.outputs.repack_name }} | awk '{print $5}') -gt 2147483647 ]; then tar cvzpf - Frost_${{ steps.config.outputs.repack_name }} | split -d -b 1024m - upload/Frost_${{steps.config.outputs.repack_name }}; else mv Frost_${{ steps.config.outputs.repack_name }} upload/Frost_${{ steps.config.outputs.repack_name }}; fi
 
+      - name: Setup SSH
+        uses: fastai/workflows/ssh@master
+        with:
+          ssh_key: ${{ secrets.SSH_KEY }}
+          key_file: id_rsa
+          
       - name: Telegram Notify 2/3
         if: ${{ steps.config.outputs.tg_chat_ids != 0 }}
         run: |
@@ -104,8 +112,7 @@ jobs:
           chatids=("$CHAT_IDS")
 
           for chat in "${chatids[@]}"; do
-              printf "\n\nUpload GSI to GH-Release and Sourceforge...."
-              curl -s -d "chat_id=$chat" --data-urlencode "text=Upload GSI to GH-Release and Sourceforge...." "$TG_URL"
+              curl -s -d "chat_id=$chat" --data-urlencode "text=Uploading...." "$TG_URL"
             done
 
       - name: upload to release
@@ -115,17 +122,11 @@ jobs:
           artifacts: ${{ github.workspace }}/ErfanGSIs/upload/*
           name: "${{ steps.config.outputs.os_type }}-${{ steps.config.outputs.build_type }}-Android${{ steps.config.outputs.version }}-unpack"
           tag: "${{ github.config.outputs.repack_name }}_${{ steps.config.outputs.build_type }}-${{ steps.config.outputs.version }}-${{ github.run_number }}"
-          bodyFile: "${{ github.workspace }}/ErfanGSIs/infobuild/build_info.txt"
+          bodyFile: "${{ github.workspace }}/ErfanGSIs/infobuild/readme.txt"
           token: ${{ secrets.MY_TOKEN }}
         
       - name: Save Release Info to Environment File
         run: echo "RELEASE_ID=${{ steps.release_info.outputs.release_id }}" >> $GITHUB_ENV
-
-      - name: Setup SSH
-        uses: fastai/workflows/ssh@master
-        with:
-          ssh_key: ${{ secrets.SSH_KEY }}
-          key_file: id_ecdsa
 
       - name: Upload to sourceforge
         if: ${{ steps.config.outputs.sourceforge == 'yes' }}
@@ -133,7 +134,7 @@ jobs:
           sudo apt install sshpass -y
           ssh-keyscan frs.sourceforge.net >> ~/.ssh/known_hosts
           sshpass -p "${{ secrets.PASSWORD }}" rsync -arsP -e ssh ${{ github.workspace }}/ErfanGSIs/upload/*.7z "${{ secrets.USERNAME }}@frs.sourceforge.net:${{ steps.config.outputs.sourceforge_dir }}"
-          sshpass -p "${{ secrets.PASSWORD }}" rsync -arsP -e ssh ${{ github.workspace }}/ErfanGSIs/infobuild/build_info.txt "${{ secrets.USERNAME }}@frs.sourceforge.net:${{ steps.config.outputs.sourceforge_dir }}"
+          sshpass -p "${{ secrets.PASSWORD }}" rsync -arsP -e ssh ${{ github.workspace }}/ErfanGSIs/infobuild/*.txt "${{ secrets.USERNAME }}@frs.sourceforge.net:${{ steps.config.outputs.sourceforge_dir }}"
 
       - name: Upload to Transfer.sh
         if: ${{ steps.config.outputs.transfer_sh == 'yes' }}
@@ -141,6 +142,28 @@ jobs:
           pip install transfer.sh
           cd $GITHUB_WORKSPACE/ErfanGSIs/upload/
           transfer up *.7z
+          
+      - name: send to topic 
+        if: ${{ steps.config.outputs.topic == 'yes' }}
+        run: |
+          TYPE="${{ steps.config.outputs.firmware_type }}"
+          OUTPUT="${{ steps.config.outputs.output_type }}"
+          BASE="${{ steps.config.outputs.rom_url }}"
+          SOURCEFORGE="${{ steps.config.outputs.sourceforge_url }}"
+          ROM_NAME_INFO="${{ steps.config.outputs.rom_name_info }}"
+         
+          for file in "${{ github.workspace }}/ErfanGSIs/infobuild/readme.txt"; do
+          filename=$(basename -- "$file")
+          sed -i "1s/^/Name: ${filename%.*}\n/" "$file"
+          printf "\n\nROM: $ROM_NAME_INFO" >> "$file"
+          printf "\n\nBase Firmware Link: $BASE" >> "$file"
+          printf "\n\nDownload Link: $SOURCEFORGE" >> "$file"
+                
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage" \
+          -d "chat_id=${{ steps.config.outputs.tg_chat_ids }}" \
+          --data-urlencode "reply_to_message_id=${{ steps.config.outputs.tg_topic }}" \
+          --data-urlencode "text@${file}"        
+          done
       
 
       - name: Telegram Notify 3/3
@@ -158,10 +181,10 @@ jobs:
             BASE="${{ steps.config.outputs.rom_url }}"
             SOURCEFORGE="${{ steps.config.outputs.sourceforge_url }}"
             ROM_NAME_INFO="${{ steps.config.outputs.rom_name_info }}"
-            for file in "${{ github.workspace }}/ErfanGSIs/infobuild/build_info.txt"; do
+            for file in "${{ github.workspace }}/ErfanGSIs/infobuild/readme.txt"; do
               filename=$(basename -- "$file")
               sed -i "1s/^/Name: ${filename%.*}\n/" "$file"
-              printf "\n\nROM: $ROM_NAME_INFO" >> "$file"
+              printf "\n\nFrom Rom: $ROM_NAME_INFO" >> "$file"
               printf "\n\nBase Firmware Link: $BASE" >> "$file"
               printf "\n\nDownload Link: $SOURCEFORGE" >> "$file"
               curl -s -d "chat_id=$chat" --data-urlencode text@$file "$TG_URL"
